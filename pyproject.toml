@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     # the panel this extends: from this version it has no Media page of its own
-    "ovos-control-panel>=0.0.1a85",
+    "ovos-control-panel>=0.0.1a86",
 ]
 
 [project.optional-dependencies]

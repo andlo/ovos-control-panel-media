@@ -7,7 +7,7 @@ the volume, the other matches for what you asked for, and the songs you have
 liked.
 
 It is a **panel extension**: a page for the panel, nothing more. It was one of
-the panel's own pages until 0.0.1a84; it left so that a device that plays no
+the panel's own pages up to 0.0.1a85; it left so that a device that plays no
 media (a reception desk, a phone line) does not carry it. Install it beside the
 panel where the device plays media:
 
