@@ -30,8 +30,8 @@ class MediaToggleBody(BaseModel):
 
 
 class LocalFileBody(BaseModel):
-    """One of your own files: the skill's folder and the file's name."""
-    category: str = Field(max_length=40)
+    """One of your own files: which of the provider's folders, and its name."""
+    folder: int = Field(ge=0, le=100, strict=True)
     name: str = Field(max_length=400)
 
 
@@ -148,7 +148,7 @@ def routes(r) -> None:
         from ovos_control_panel_media import player as media
         return media.unmute(r.need_bus())
 
-    # ── your own media: files for ovos-skill-local-media ──────────────────────
+    # ── your own media: files for ovos-media-provider-local ───────────────────
     # Privileged like the rest: the list shows what is kept on the device, and
     # the others write and delete files there.
     from fastapi import Query, Request
@@ -163,7 +163,7 @@ def routes(r) -> None:
 
     @r.privileged.post("/media/local/upload")
     async def api_media_local_upload(request: Request,
-                                     category: str = Query(max_length=40),
+                                     folder: int = Query(ge=0, le=100),
                                      name: str = Query(max_length=400),
                                      offset: int = Query(ge=0),
                                      total: int = Query(ge=1)) -> dict[str, Any]:
@@ -172,19 +172,15 @@ def routes(r) -> None:
         from ovos_control_panel_media import local
         blob = await request.body()
         try:
-            done = await run_in_threadpool(local.receive, category, name, offset, total, blob)
+            return await run_in_threadpool(local.receive, folder, name, offset, total, blob)
         except local.LocalMediaError as e:
             raise _fail(e) from e
-        if done["done"]:
-            local.rescan(r.bus(), done.pop("skill"))
-        return done
 
     @r.privileged.post("/media/local/delete")
     def api_media_local_delete(body: LocalFileBody) -> dict[str, Any]:
         from ovos_control_panel_media import local
         try:
-            sid = local.remove(body.category, body.name)
+            local.remove(body.folder, body.name)
         except local.LocalMediaError as e:
             raise _fail(e) from e
-        local.rescan(r.bus(), sid)
         return {"ok": True}
