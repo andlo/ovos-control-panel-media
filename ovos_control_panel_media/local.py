@@ -2,9 +2,11 @@
 ovos-media-provider-local finds them.
 
 The provider is loaded by the OCP pipeline and searches the folders in its
-``paths`` setting (``intents.ovos-ocp-pipeline-plugin.media_providers.local``
-in mycroft.conf; ``~/Music`` and ``~/Videos`` unless it is set), with their
-subfolders. It reads them again by itself at the next search, so nothing has
+``paths`` setting (``~/Music`` and ``~/Videos`` unless it is set), with their
+subfolders. Its settings are ``media_providers.local`` in the pipeline's own
+section (``intents.ovos-ocp-pipeline-plugin``) when that section has a
+``media_providers``, and the top-level ``media_providers.local`` when not, as
+the pipeline reads them. It reads them again by itself at the next search, so nothing has
 to be told about a new file.
 
 A file comes in parts, so no request is larger than :data:`PART`, and it is
@@ -24,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 PROVIDER_PACKAGE = "ovos-media-provider-local"
-#: Where the provider's settings are in mycroft.conf
-CONFIG_PATH = ["intents", "ovos-ocp-pipeline-plugin", "media_providers", "local"]
+#: Where the pipeline's own media_providers is in mycroft.conf
+PIPELINE_PATH = ["intents", "ovos-ocp-pipeline-plugin", "media_providers"]
 #: What the provider indexes (its AUDIO_EXTENSIONS and VIDEO_EXTENSIONS)
 AUDIO = (".aac", ".ac3", ".aiff", ".amr", ".ape", ".au", ".flac", ".alac", ".m4a", ".m4b",
          ".m4p", ".mp2", ".mp3", ".mpc", ".oga", ".ogg", ".opus", ".wav", ".wma")
@@ -59,8 +61,14 @@ def installed() -> bool:
 
 
 def _settings() -> dict[str, Any]:
+    """The provider's settings, from where the pipeline reads them: its own
+    media_providers if it has one, else the top-level one."""
     from ovos_webui import configio
-    found = configio.get_in(configio.read_merged_config(), CONFIG_PATH)
+    cfg = configio.read_merged_config()
+    providers = configio.get_in(cfg, PIPELINE_PATH)
+    if not isinstance(providers, dict):
+        providers = cfg.get("media_providers")
+    found = providers.get("local") if isinstance(providers, dict) else None
     return found if isinstance(found, dict) else {}
 
 

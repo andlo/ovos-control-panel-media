@@ -62,9 +62,10 @@ and films. Choose one of the folders the provider searches and one or more
 files, and they are put there; ask for one by name and it is found, since the
 provider reads its folders again at every search.
 
-- The folders are the provider's own `paths` setting
-  (`intents.ovos-ocp-pipeline-plugin.media_providers.local` in mycroft.conf),
-  or `~/Music` and `~/Videos` when it is not set.
+- The folders are the provider's own `paths` setting, read where the OCP
+  pipeline reads it: `media_providers.local` in mycroft.conf, or in
+  `intents.ovos-ocp-pipeline-plugin` when that has a `media_providers` of its
+  own. `~/Music` and `~/Videos` when it is not set.
 - It takes what the provider finds: sound (`.mp3`, `.ogg`, `.flac`, `.wav`,
   `.m4a` and more) and films (`.mp4`, `.mkv`, `.webm` and more).
 - The largest file is the panel's own setting, on the **Control panel** page

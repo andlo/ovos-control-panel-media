@@ -135,6 +135,18 @@ def test_the_folders_are_the_providers_own_setting(tmp_path, monkeypatch):
     assert local.folders() == [tmp_path / "m", __import__("pathlib").Path(os.path.expanduser("~/Videos"))]
 
 
+def test_without_the_pipelines_own_the_top_level_settings_count(tmp_path, monkeypatch):
+    """The pipeline hands the provider its own media_providers, or None, and
+    then the plugin manager reads the top-level media_providers."""
+    from ovos_webui import configio
+    top = {"media_providers": {"local": {"paths": [str(tmp_path / "top")]}}}
+    monkeypatch.setattr(configio, "read_merged_config", lambda: top)
+    assert local.folders() == [tmp_path / "top"]
+    both = dict(top, intents={"ovos-ocp-pipeline-plugin": {"media_providers": {"local": {"paths": [str(tmp_path / "p")]}}}})
+    monkeypatch.setattr(configio, "read_merged_config", lambda: both)
+    assert local.folders() == [tmp_path / "p"], "the pipeline's own wins"
+
+
 def test_a_provider_turned_off_is_said(monkeypatch):
     _config(monkeypatch, {"enabled": False})
     assert local.enabled() is False

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovos-control-panel-media"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "ovos-control-panel extension: what the device is playing, the queue, the volume, and the other matches for a request"
 readme = "README.md"
 license = {text = "Apache-2.0"}
