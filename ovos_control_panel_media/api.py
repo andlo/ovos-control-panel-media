@@ -30,7 +30,7 @@ class MediaToggleBody(BaseModel):
 
 
 class LocalFileBody(BaseModel):
-    """One of your own files: which of the provider's folders, and its name."""
+    """One of your own files: which of the folders, and its name."""
     folder: int = Field(ge=0, le=100, strict=True)
     name: str = Field(max_length=400)
 
@@ -148,7 +148,7 @@ def routes(r) -> None:
         from ovos_control_panel_media import player as media
         return media.unmute(r.need_bus())
 
-    # ── your own media: files for ovos-media-provider-local ───────────────────
+    # ── your own media: files for the local media provider or skill ──────────
     # Privileged like the rest: the list shows what is kept on the device, and
     # the others write and delete files there.
     from fastapi import Query, Request
@@ -172,15 +172,19 @@ def routes(r) -> None:
         from ovos_control_panel_media import local
         blob = await request.body()
         try:
-            return await run_in_threadpool(local.receive, folder, name, offset, total, blob)
+            done = await run_in_threadpool(local.receive, folder, name, offset, total, blob)
         except local.LocalMediaError as e:
             raise _fail(e) from e
+        if done["done"]:
+            local.rescan(r.bus(), done.pop("rescan"))
+        return done
 
     @r.privileged.post("/media/local/delete")
     def api_media_local_delete(body: LocalFileBody) -> dict[str, Any]:
         from ovos_control_panel_media import local
         try:
-            local.remove(body.folder, body.name)
+            sid = local.remove(body.folder, body.name)
         except local.LocalMediaError as e:
             raise _fail(e) from e
+        local.rescan(r.bus(), sid)
         return {"ok": True}

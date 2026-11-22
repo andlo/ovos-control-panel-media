@@ -56,28 +56,36 @@ device, and **Unmute** to restore the sound.
 
 ## Your own media
 
-With [ovos-media-provider-local](https://github.com/OpenVoiceOS/ovos-media-provider-local)
-installed where the panel runs, the page also has a card for your own songs
-and films. Choose one of the folders the provider searches and one or more
-files, and they are put there; ask for one by name and it is found, since the
-provider reads its folders again at every search.
+The page has a card for your own songs and films when the device searches
+local files. Choose a folder and one or more files, and they are put where
+they are found; then ask for one by name. Two things search local files, and
+the card works with the one installed:
 
-- The folders are the provider's own `paths` setting, read where the OCP
-  pipeline reads it: `media_providers.local` in mycroft.conf, or in
-  `intents.ovos-ocp-pipeline-plugin` when that has a `media_providers` of its
-  own. `~/Music` and `~/Videos` when it is not set.
-- It takes what the provider finds: sound (`.mp3`, `.ogg`, `.flac`, `.wav`,
-  `.m4a` and more) and films (`.mp4`, `.mkv`, `.webm` and more).
+- **[ovos-media-provider-local](https://github.com/OpenVoiceOS/ovos-media-provider-local)**,
+  the MediaProvider OVOS is moving to. The folders are its `paths` setting
+  (`~/Music` and `~/Videos` unless it is set), read where the OCP pipeline
+  reads it: `media_providers.local`, in `intents.ovos-ocp-pipeline-plugin`
+  when that has a `media_providers` of its own. It takes sound and films in
+  every folder, finds files in subfolders too, and reads its folders again at
+  every search.
+- **[ovos-skill-local-media](https://github.com/OpenVoiceOS/ovos-skill-local-media)**,
+  the OCP skill still in the OVOS releases. The folders are its categories
+  under `~/OCPMedia` (or its `media_path` setting): Music, Podcasts,
+  Audiobooks and the other sound folders take sound; Films, Series and the
+  other film folders take films too. The skill is asked to read its folders
+  again after each change.
+
+With both installed, the provider is used.
+
 - The largest file is the panel's own setting, on the **Control panel** page
   under **Uploads**: 1024 MB unless it is set. A device that is never meant to
   hold films can take less.
 - A file goes in parts of 8 MB, so a large one never sits in memory, and a
   file with the same name that is already there is left as it is.
-- The card lists the files in each folder (not in its subfolders, which the
-  provider finds too) and deletes one when you ask. Everything on it needs the
-  token.
+- The card lists the files in each folder and deletes one when you ask.
+  Everything on it needs the token.
 
-The panel and the OCP pipeline have to run on the same machine.
+The panel and the assistant have to run on the same machine.
 
 ## Development
 

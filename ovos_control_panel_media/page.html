@@ -86,18 +86,19 @@
   <div id="local-wrap" hidden>
     <h2 data-i18n="media.local.title">Your own media</h2>
     <div class="card" id="local-card">
-      <p class="hint" data-i18n="media.local.where">Put songs and films on the device. They go in a folder the local media provider searches, and you can ask for them by name straight away.</p>
+      <p class="hint" data-i18n="media.local.where">Put songs and films on the device. They go in a folder the device searches for local media, and you can ask for them by name straight away.</p>
       <p class="hint" id="local-off" data-i18n="media.local.off" hidden>The local media provider is turned off in the configuration, so nothing here is found until it is on again.</p>
       <label><span data-i18n="media.local.category">Folder</span>
         <select id="local-cat"></select></label>
       <label><span data-i18n="media.local.files">Files</span>
         <input type="file" id="local-file" multiple></label>
+      <p class="hint" id="local-path"></p>
       <p class="hint" id="local-limits"></p>
       <div class="row"><button id="local-send" data-i18n="media.local.send">Upload</button></div>
       <progress id="local-progress" max="100" value="0" hidden></progress>
       <div class="msg" id="msg-local" role="status" aria-live="polite" hidden></div>
       <p class="hint" id="local-empty" data-i18n="media.local.empty" hidden>No files in this folder yet.</p>
-      <p class="hint" data-i18n="media.local.sub">Files in subfolders are found too, but not listed here.</p>
+      <p class="hint" id="local-sub" data-i18n="media.local.sub" hidden>Files in subfolders are found too, but not listed here.</p>
       <ul class="plain" id="local-list"></ul>
     </div>
   </div>
@@ -359,11 +360,19 @@ OvosWebUI.ready(function () {
   var local = null;
   function mb(bytes) { return Math.max(1, Math.round(bytes / 1048576)); }
   function chosen() { return local.folders[parseInt(el("local-cat").value, 10) || 0]; }
+  function folderLabel(f) { return f.category ? t("media.local.cat." + f.category, f.category) : f.path; }
   function showLocalList() {
     var n = parseInt(el("local-cat").value, 10) || 0, folder = chosen();
+    el("local-path").textContent = folder.category ? folder.path : "";
+    el("local-path").hidden = !folder.category;
     var list = el("local-list");
     list.textContent = "";
     el("local-empty").hidden = folder.files.length > 0;
+    el("local-file").accept = folder.endings.join(",");
+    var films = folder.endings.indexOf(".mp4") >= 0;
+    el("local-limits").textContent = t("media.local.limit", "Up to {mb} MB a file.").replace("{mb}", mb(local.max_bytes))
+      + " " + (films ? t("media.local.takesVideo", "This folder takes films and sound.")
+                     : t("media.local.takesAudio", "This folder takes sound."));
     folder.files.forEach(function (f) {
       var li = document.createElement("li");
       var name = document.createElement("span");
@@ -391,14 +400,13 @@ OvosWebUI.ready(function () {
       local = r;
       el("local-wrap").hidden = false;
       el("local-off").hidden = r.enabled;
-      el("local-file").accept = r.endings.join(",");
-      el("local-limits").textContent = t("media.local.limit", "Up to {mb} MB a file.").replace("{mb}", mb(r.max_bytes));
+      el("local-sub").hidden = r.by !== "provider";
       var sel = el("local-cat");
       sel.textContent = "";
       r.folders.forEach(function (f, i) {
         var o = document.createElement("option");
         o.value = String(i);
-        o.textContent = f.path + (f.files.length ? " (" + f.files.length + ")" : "");
+        o.textContent = folderLabel(f) + (f.files.length ? " (" + f.files.length + ")" : "");
         sel.appendChild(o);
       });
       sel.value = keep < r.folders.length ? keep : "0";

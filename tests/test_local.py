@@ -1,4 +1,5 @@
-"""Your own media: files put on the device for ovos-media-provider-local."""
+"""Your own media: files put on the device for ovos-media-provider-local, or
+for ovos-skill-local-media where that is what the device has."""
 import pytest
 
 from ovos_control_panel_media import local
@@ -8,8 +9,9 @@ from ovos_control_panel_media import local
 def media(tmp_path, monkeypatch):
     """The provider is installed and searches tmp_path/Music and
     tmp_path/Videos; files up to 20 bytes."""
-    monkeypatch.setattr(local, "installed", lambda: True)
-    monkeypatch.setattr(local, "folders", lambda: [tmp_path / "Music", tmp_path / "Videos"])
+    src = local.Source("provider", [local.Folder(tmp_path / "Music", None, local.ENDINGS),
+                                    local.Folder(tmp_path / "Videos", None, local.ENDINGS)])
+    monkeypatch.setattr(local, "source", lambda: src)
     monkeypatch.setattr(local, "max_bytes", lambda: 20)
     monkeypatch.setattr(local, "PART", 8)
     return tmp_path
@@ -31,8 +33,8 @@ def _send(c, data, name="song.mp3", folder=0, part=8):
     return r
 
 
-def test_without_the_provider_there_is_nothing_to_show(c, monkeypatch):
-    monkeypatch.setattr(local, "installed", lambda: False)
+def test_without_the_provider_or_the_skill_there_is_nothing_to_show(c, monkeypatch):
+    monkeypatch.setattr(local, "source", lambda: None)
     assert c.get("/api/media/local").json() == {"installed": False}
     r = c.post("/api/media/local/upload", content=b"x",
                params={"folder": 0, "name": "a.mp3", "offset": 0, "total": 1})
@@ -55,10 +57,11 @@ def test_a_file_comes_in_parts_and_is_put_where_the_provider_searches(c, media):
     assert not list((media / "Music").glob(".*")), "no part left behind"
     (media / "Music" / "notes.txt").write_text("not media")
     seen = c.get("/api/media/local").json()
-    assert seen["installed"] and seen["enabled"] and ".mp3" in seen["endings"]
-    assert seen["folders"] == [
-        {"path": str(media / "Music"), "exists": True, "files": [{"name": "song.mp3", "size": 19}]},
-        {"path": str(media / "Videos"), "exists": False, "files": []}]
+    assert seen["installed"] and seen["enabled"] and seen["by"] == "provider"
+    music, videos = seen["folders"]
+    assert music["path"] == str(media / "Music") and music["category"] is None and ".mkv" in music["endings"]
+    assert music["files"] == [{"name": "song.mp3", "size": 19}] and music["exists"]
+    assert videos["files"] == [] and not videos["exists"]
 
 
 def test_a_part_that_does_not_follow_on_is_refused(c, media):
@@ -119,39 +122,71 @@ def test_no_room_on_the_disk_is_said(c, media, monkeypatch):
     assert _send(c, b"abc").status_code == 507
 
 
-def _config(monkeypatch, local_cfg):
+def _config(monkeypatch, cfg):
     from ovos_webui import configio
-    cfg = {"intents": {"ovos-ocp-pipeline-plugin": {"media_providers": {"local": local_cfg}}}}
     monkeypatch.setattr(configio, "read_merged_config", lambda: cfg)
 
 
-def test_the_folders_are_the_providers_own_setting(tmp_path, monkeypatch):
-    _config(monkeypatch, {"paths": [str(tmp_path / "a"), "~/b", str(tmp_path / "a"), "", 5]})
+def _only(monkeypatch, package):
+    """Only ``package`` of the two is installed."""
+    from types import SimpleNamespace as NS
+    eps = [NS(group="opm.skill", name="ovos-skill-local-media.openvoiceos")]
+    monkeypatch.setattr(local, "_installed", lambda p: NS(entry_points=eps) if p == package else None)
+
+
+def test_the_provider_searches_its_own_paths(tmp_path, monkeypatch):
+    _only(monkeypatch, local.PROVIDER_PACKAGE)
+    pipe = {"intents": {"ovos-ocp-pipeline-plugin": {"media_providers": {
+        "local": {"paths": [str(tmp_path / "a"), "~/b", str(tmp_path / "a"), "", 5]}}}}}
+    _config(monkeypatch, pipe)
+    src = local.source()
     import os
-    assert local.folders() == [tmp_path / "a", __import__("pathlib").Path(os.path.expanduser("~/b"))]
-    _config(monkeypatch, {})
+    from pathlib import Path
+    assert src.kind == "provider" and src.enabled and src.skill is None
+    assert [f.path for f in src.folders] == [tmp_path / "a", Path(os.path.expanduser("~/b"))]
+    _config(monkeypatch, {"media_providers": {"local": {"enabled": False}}})
     monkeypatch.setenv("XDG_MUSIC_DIR", str(tmp_path / "m"))
     monkeypatch.delenv("XDG_VIDEOS_DIR", raising=False)
-    assert local.folders() == [tmp_path / "m", __import__("pathlib").Path(os.path.expanduser("~/Videos"))]
+    src = local.source()
+    assert not src.enabled, "the top-level settings, as the pipeline has none of its own"
+    assert [f.path for f in src.folders] == [tmp_path / "m", Path(os.path.expanduser("~/Videos"))]
 
 
-def test_without_the_pipelines_own_the_top_level_settings_count(tmp_path, monkeypatch):
-    """The pipeline hands the provider its own media_providers, or None, and
-    then the plugin manager reads the top-level media_providers."""
-    from ovos_webui import configio
-    top = {"media_providers": {"local": {"paths": [str(tmp_path / "top")]}}}
-    monkeypatch.setattr(configio, "read_merged_config", lambda: top)
-    assert local.folders() == [tmp_path / "top"]
-    both = dict(top, intents={"ovos-ocp-pipeline-plugin": {"media_providers": {"local": {"paths": [str(tmp_path / "p")]}}}})
-    monkeypatch.setattr(configio, "read_merged_config", lambda: both)
-    assert local.folders() == [tmp_path / "p"], "the pipeline's own wins"
+def test_the_skill_has_its_category_folders(tmp_path, monkeypatch):
+    from ovos_webui import skillsio
+    _only(monkeypatch, local.SKILL_PACKAGE)
+    monkeypatch.setattr(skillsio, "read_settings", lambda sid: {"media_path": str(tmp_path)})
+    src = local.source()
+    assert src.kind == "skill" and src.skill == "ovos-skill-local-media.openvoiceos"
+    music = src.folders[0]
+    assert music.path == tmp_path / "Music" and music.category == "Music" and ".mp4" not in music.endings
+    movies = next(f for f in src.folders if f.category == "Movies")
+    assert ".mp4" in movies.endings and len(src.folders) == len(local.SKILL_CATEGORIES)
+    monkeypatch.setattr(skillsio, "read_settings", lambda sid: {})
+    assert str(local.source().folders[0].path).endswith("OCPMedia/Music")
 
 
-def test_a_provider_turned_off_is_said(monkeypatch):
-    _config(monkeypatch, {"enabled": False})
-    assert local.enabled() is False
+def test_with_both_the_provider_is_used(monkeypatch):
+    monkeypatch.setattr(local, "_installed", lambda p: object())
     _config(monkeypatch, {})
-    assert local.enabled() is True
+    assert local.source().kind == "provider"
+
+
+def test_the_skill_is_asked_to_read_its_folders_again(c, tmp_path, monkeypatch, bus):
+    asked = []
+    bus.on("ovos-skill-local-media.openvoiceos.scan", lambda m: asked.append(m))
+    src = local.Source("skill", [local.Folder(tmp_path / "Music", "Music", local.AUDIO),
+                                 local.Folder(tmp_path / "Movies", "Movies", local.ENDINGS)],
+                       skill="ovos-skill-local-media.openvoiceos")
+    monkeypatch.setattr(local, "source", lambda: src)
+    monkeypatch.setattr(local, "max_bytes", lambda: 20)
+    assert _send(c, b"abc", name="film.mp4", folder=0).status_code == 415, "Music takes sound"
+    assert _send(c, b"abc", name="film.mp4", folder=1).json() == {"done": True, "received": 3, "name": "film.mp4"}
+    assert len(asked) == 1
+    assert c.post("/api/media/local/delete", json={"folder": 1, "name": "film.mp4"}).json() == {"ok": True}
+    assert len(asked) == 2
+    seen = c.get("/api/media/local").json()
+    assert seen["by"] == "skill" and seen["folders"][1]["category"] == "Movies"
 
 
 def test_the_largest_file_is_the_panels_setting(monkeypatch):

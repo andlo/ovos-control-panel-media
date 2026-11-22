@@ -1,39 +1,51 @@
-"""Your own media: files put on the device from the browser, where
-ovos-media-provider-local finds them.
+"""Your own media: files put on the device from the browser, where the
+device's local media search finds them.
 
-The provider is loaded by the OCP pipeline and searches the folders in its
-``paths`` setting (``~/Music`` and ``~/Videos`` unless it is set), with their
-subfolders. Its settings are ``media_providers.local`` in the pipeline's own
-section (``intents.ovos-ocp-pipeline-plugin``) when that section has a
-``media_providers``, and the top-level ``media_providers.local`` when not, as
-the pipeline reads them. It reads them again by itself at the next search, so nothing has
-to be told about a new file.
+Two things search local files, and the card works with the one installed:
+
+- **ovos-media-provider-local**, the MediaProvider the OCP pipeline loads. It
+  searches the folders in its ``paths`` setting (``~/Music`` and ``~/Videos``
+  unless it is set), with their subfolders, and reads them again at every
+  search. Its settings are ``media_providers.local`` where the pipeline reads
+  them (:func:`ovos_webui.described.providers_place`).
+- **ovos-skill-local-media**, the OCP skill it replaces, still in the OVOS
+  releases. It reads ``<media_path>/<category>/`` (``~/OCPMedia/Music`` and
+  so on; ``media_path`` is its own setting) and is asked to read them again
+  with ``<skill id>.scan``.
+
+With both installed the provider is used: it is the one OVOS is moving to.
 
 A file comes in parts, so no request is larger than :data:`PART`, and it is
-written beside its final name as ``.<name>.part`` (which the provider skips)
-until the last part. The largest file is the panel's ``webui.max_upload_mb``,
-set on the Control panel page.
-
-This runs where the panel runs, so it only helps when the OCP pipeline runs
+written beside its final name as ``.<name>.part`` until the last part. The
+largest file is the panel's ``webui.max_upload_mb``, set on the Control panel
+page. This runs where the panel runs, so it only helps when the assistant runs
 there too.
 """
 from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
 PROVIDER_PACKAGE = "ovos-media-provider-local"
-#: Where the pipeline's own media_providers is in mycroft.conf
-PIPELINE_PATH = ["intents", "ovos-ocp-pipeline-plugin", "media_providers"]
-#: What the provider indexes (its AUDIO_EXTENSIONS and VIDEO_EXTENSIONS)
+SKILL_PACKAGE = "ovos-skill-local-media"
+#: What ovos-media-provider-local indexes (its AUDIO_EXTENSIONS, VIDEO_EXTENSIONS)
 AUDIO = (".aac", ".ac3", ".aiff", ".amr", ".ape", ".au", ".flac", ".alac", ".m4a", ".m4b",
          ".m4p", ".mp2", ".mp3", ".mpc", ".oga", ".ogg", ".opus", ".wav", ".wma")
 VIDEO = (".3g2", ".3gp", ".3gpp", ".asf", ".avi", ".flv", ".m2ts", ".mkv", ".mov", ".mp4",
          ".mpeg", ".mpg", ".mts", ".ogm", ".ogv", ".qt", ".vob", ".webm", ".wmv")
 ENDINGS = AUDIO + VIDEO
+#: The skill's folders under its media_path, and whether each holds sound only
+SKILL_CATEGORIES = {
+    "Music": "audio", "Podcasts": "audio", "Audiobooks": "audio", "RadioTheatre": "audio",
+    "AudioDescriptions": "audio", "Movies": "video", "Series": "video",
+    "Documentaries": "video", "Anime": "video", "Cartoon": "video", "Shorts": "video",
+    "SilentMovies": "video", "BWMovies": "video",
+}
+SKILL_DEFAULT_PATH = "~/OCPMedia"
 #: One request's part of a file
 PART = 8 * 1024 * 1024
 #: Room left on the disk after a file, so an upload never fills it
@@ -51,31 +63,41 @@ class LocalMediaError(Exception):
         self.detail = detail
 
 
-def installed() -> bool:
-    """Whether ovos-media-provider-local is installed where the panel runs."""
+@dataclass
+class Folder:
+    path: Path
+    #: the skill's category (Music, Movies, ...), for the card to translate
+    category: str | None
+    endings: tuple[str, ...]
+
+
+@dataclass
+class Source:
+    """What finds the files: ``provider`` or ``skill``, and its folders."""
+    kind: str
+    folders: list[Folder]
+    enabled: bool = True
+    #: the skill's id, to ask it to read its folders again
+    skill: str | None = None
+
+
+def _installed(package: str) -> metadata.Distribution | None:
     try:
-        metadata.distribution(PROVIDER_PACKAGE)
+        return metadata.distribution(package)
     except Exception:  # noqa: BLE001 - not there, or broken metadata
-        return False
-    return True
+        return None
 
 
-def _settings() -> dict[str, Any]:
-    """The provider's settings, from where the pipeline reads them: its own
-    media_providers if it has one, else the top-level one."""
-    from ovos_webui import configio
-    cfg = configio.read_merged_config()
-    providers = configio.get_in(cfg, PIPELINE_PATH)
-    if not isinstance(providers, dict):
-        providers = cfg.get("media_providers")
-    found = providers.get("local") if isinstance(providers, dict) else None
+def _provider_settings() -> dict[str, Any]:
+    from ovos_webui import configio, described
+    found = configio.get_in(configio.read_merged_config(), described.providers_place() + ["local"])
     return found if isinstance(found, dict) else {}
 
 
-def folders() -> list[Path]:
+def provider_folders(settings: dict[str, Any]) -> list[Path]:
     """The folders the provider searches: its ``paths``, or the user's music
     and videos folders as it picks them."""
-    raw = _settings().get("paths")
+    raw = settings.get("paths")
     if isinstance(raw, list) and any(isinstance(p, str) and p.strip() for p in raw):
         paths = [p.strip() for p in raw if isinstance(p, str) and p.strip()]
     else:
@@ -84,8 +106,39 @@ def folders() -> list[Path]:
     return [Path(os.path.expanduser(p)) for p in dict.fromkeys(paths)]
 
 
-def enabled() -> bool:
-    return _settings().get("enabled", True) is not False
+def _skill_id(dist: metadata.Distribution) -> str | None:
+    try:
+        names = sorted({ep.name for ep in dist.entry_points
+                        if ep.group in ("opm.skill", "ovos.plugin.skill")})
+    except Exception:  # noqa: BLE001
+        return None
+    return names[0] if names else None
+
+
+def skill_folder(sid: str) -> Path:
+    """Where the skill looks: its own ``media_path`` setting, or ~/OCPMedia."""
+    from ovos_webui import skillsio
+    try:
+        raw = skillsio.read_settings(sid).get("media_path")
+    except (skillsio.SkillSettingsError, ValueError, AttributeError):
+        raw = None
+    path = raw if isinstance(raw, str) and raw.strip() else SKILL_DEFAULT_PATH
+    return Path(os.path.expanduser(path.strip()))
+
+
+def source() -> Source | None:
+    """The provider if it is installed, else the skill, else nothing."""
+    if _installed(PROVIDER_PACKAGE) is not None:
+        settings = _provider_settings()
+        return Source("provider", [Folder(p, None, ENDINGS) for p in provider_folders(settings)],
+                      enabled=settings.get("enabled", True) is not False)
+    dist = _installed(SKILL_PACKAGE)
+    sid = _skill_id(dist) if dist is not None else None
+    if sid is not None:
+        base = skill_folder(sid)
+        return Source("skill", [Folder(base / cat, cat, AUDIO if kind == "audio" else ENDINGS)
+                                for cat, kind in SKILL_CATEGORIES.items()], skill=sid)
+    return None
 
 
 def max_bytes() -> int:
@@ -98,11 +151,18 @@ def _name(raw: str) -> str:
     return upload_name(raw or "")
 
 
-def _folder(n: int) -> Path:
-    found = folders()
-    if not 0 <= n < len(found):
-        raise LocalMediaError(400, "not one of the provider's folders")
-    return found[n]
+def _need() -> Source:
+    found = source()
+    if found is None:
+        raise LocalMediaError(409, "neither ovos-media-provider-local nor ovos-skill-local-media "
+                                   "is installed here")
+    return found
+
+
+def _folder(src: Source, n: int) -> Folder:
+    if not 0 <= n < len(src.folders):
+        raise LocalMediaError(400, "not one of the folders")
+    return src.folders[n]
 
 
 def _target(where: Path, name: str) -> Path:
@@ -116,49 +176,51 @@ def _target(where: Path, name: str) -> Path:
 
 
 def overview() -> dict[str, Any]:
-    """Whether the provider is here and on, the largest file, and the files
-    the panel can see in each of its folders (not those in subfolders, which
-    the provider finds too)."""
-    if not installed():
+    """What finds the files, whether it is on, the largest file, and the
+    files directly in each of its folders."""
+    src = source()
+    if src is None:
         return {"installed": False}
     out = []
-    for where in folders():
+    for folder in src.folders:
         files = []
-        if where.is_dir():
-            for f in sorted(where.iterdir(), key=lambda p: p.name.lower()):
+        if folder.path.is_dir():
+            for f in sorted(folder.path.iterdir(), key=lambda p: p.name.lower()):
                 if len(files) >= MAX_FILES:
                     break
-                if f.name.startswith(".") or not f.is_file() or not f.name.lower().endswith(ENDINGS):
+                if f.name.startswith(".") or not f.is_file() \
+                        or not f.name.lower().endswith(folder.endings):
                     continue
                 files.append({"name": f.name, "size": f.stat().st_size})
-        out.append({"path": str(where), "exists": where.is_dir(), "files": files})
-    return {"installed": True, "enabled": enabled(), "max_bytes": max_bytes(), "part": PART,
-            "endings": list(ENDINGS), "folders": out}
+        out.append({"path": str(folder.path), "category": folder.category,
+                    "endings": list(folder.endings), "exists": folder.path.is_dir(), "files": files})
+    return {"installed": True, "by": src.kind, "enabled": src.enabled, "max_bytes": max_bytes(),
+            "part": PART, "folders": out}
 
 
 def receive(folder: int, raw_name: str, offset: int, total: int, blob: bytes) -> dict[str, Any]:
     """Write one part of a file. The first part (offset 0) starts it; each
     next one must follow on from what is there; the last one gives it its
-    name. Answers whether the file is whole."""
-    if not installed():
-        raise LocalMediaError(409, "ovos-media-provider-local is not installed here")
-    where = _folder(folder)
+    name. Answers whether the file is whole, and when it is, the skill to ask
+    to read its folders again (if it is the skill that finds them)."""
+    src = _need()
+    where = _folder(src, folder)
     name = _name(raw_name)
-    if not name.lower().endswith(ENDINGS):
-        raise LocalMediaError(415, "not a sound or film file the provider finds")
+    if not name.lower().endswith(where.endings):
+        raise LocalMediaError(415, "not a file this folder takes: " + ", ".join(where.endings))
     if total <= 0 or offset < 0 or not blob or len(blob) > PART:
         raise LocalMediaError(400, "not a part of a file")
     if total > max_bytes():
         raise LocalMediaError(413, f"the file is larger than {max_bytes() // (1024 * 1024)} MB")
     if offset + len(blob) > total:
         raise LocalMediaError(400, "the part goes past the end of the file")
-    path = _target(where, name)
+    path = _target(where.path, name)
     part = path.with_name("." + name + ".part")
     if offset == 0:
         if path.exists():
             raise LocalMediaError(409, "a file with that name is already there")
-        where.mkdir(parents=True, exist_ok=True)
-        if shutil.disk_usage(where).free < total + SPARE:
+        where.path.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(where.path).free < total + SPARE:
             raise LocalMediaError(507, "there is not room for it on the device")
         part.write_bytes(b"")
     elif not part.is_file() or part.stat().st_size != offset:
@@ -172,15 +234,25 @@ def receive(folder: int, raw_name: str, offset: int, total: int, blob: bytes) ->
         part.unlink(missing_ok=True)
         raise LocalMediaError(409, "a file with that name is already there")
     part.replace(path)
-    return {"done": True, "received": have, "name": name}
+    return {"done": True, "received": have, "name": name, "rescan": src.skill}
 
 
-def remove(folder: int, raw_name: str) -> None:
-    """Delete one of the files the card shows."""
-    if not installed():
-        raise LocalMediaError(409, "ovos-media-provider-local is not installed here")
+def remove(folder: int, raw_name: str) -> str | None:
+    """Delete one of the files the card shows; answers the skill to ask to
+    read its folders again, if it is the skill that finds them."""
+    src = _need()
+    where = _folder(src, folder)
     name = _name(raw_name)
-    path = _target(_folder(folder), name)
-    if not path.is_file() or not name.lower().endswith(ENDINGS):
+    path = _target(where.path, name)
+    if not path.is_file() or not name.lower().endswith(where.endings):
         raise LocalMediaError(404, "there is no such file")
     path.unlink()
+    return src.skill
+
+
+def rescan(bus, sid: str | None) -> None:
+    """Ask the skill to read its folders again; the provider needs nothing."""
+    if bus is None or not sid:
+        return
+    from ovos_bus_client.message import Message
+    bus.emit(Message(f"{sid}.scan", {}))
