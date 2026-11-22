@@ -83,6 +83,23 @@
     </div>
   </div>
 
+  <div id="local-wrap" hidden>
+    <h2 data-i18n="media.local.title">Your own media</h2>
+    <div class="card" id="local-card">
+      <p class="hint" id="local-where"></p>
+      <label><span data-i18n="media.local.category">Folder</span>
+        <select id="local-cat"></select></label>
+      <label><span data-i18n="media.local.files">Files</span>
+        <input type="file" id="local-file" multiple></label>
+      <p class="hint" id="local-limits"></p>
+      <div class="row"><button id="local-send" data-i18n="media.local.send">Upload</button></div>
+      <progress id="local-progress" max="100" value="0" hidden></progress>
+      <div class="msg" id="msg-local" role="status" aria-live="polite" hidden></div>
+      <p class="hint" id="local-empty" data-i18n="media.local.empty" hidden>No files in this folder yet.</p>
+      <ul class="plain" id="local-list"></ul>
+    </div>
+  </div>
+
   <div class="msg" id="msg" role="status" aria-live="polite" hidden></div>
   <p class="hint foot"><a data-i18n="foot.manual"
     href="https://openvoiceos.github.io/beta-technical-manual/ocp-pipeline/">Learn more in the technical manual</a></p>
@@ -335,6 +352,106 @@ OvosWebUI.ready(function () {
       })
       .catch(function (e) { OvosWebUI.say("msg-volume", e.message, true); });
   });
+
+  // ── your own media: files for the Local media skill ─────────────────────
+  var local = null;
+  function mb(bytes) { return Math.max(1, Math.round(bytes / 1048576)); }
+  function catLabel(id) { return t("media.local.cat." + id, id); }
+  function showLocalList() {
+    var cat = (local.categories || []).filter(function (c) { return c.id === el("local-cat").value; })[0];
+    var files = cat ? cat.files : [];
+    var list = el("local-list");
+    list.textContent = "";
+    el("local-empty").hidden = files.length > 0;
+    files.forEach(function (f) {
+      var li = document.createElement("li");
+      var name = document.createElement("span");
+      name.textContent = f.name + " (" + mb(f.size) + " MB)";
+      var del = document.createElement("button");
+      del.className = "secondary";
+      del.textContent = t("media.local.delete", "Delete");
+      del.addEventListener("click", function () {
+        if (!OvosWebUI.confirmed(t("media.local.sure", "Delete this file from the device?") + "\n" + f.name)) { return; }
+        api("/api/media/local/delete", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({category: cat.id, name: f.name})})
+          .then(function () { OvosWebUI.say("msg-local", t("media.local.deleted", "Deleted.")); loadLocal(); })
+          .catch(function (e) { OvosWebUI.say("msg-local", e.message, true); });
+      });
+      li.appendChild(name);
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(del);
+      list.appendChild(li);
+    });
+    var video = cat && cat.kind === "video";
+    el("local-file").accept = (video ? local.audio.concat(local.video) : local.audio).join(",");
+    el("local-limits").textContent = t("media.local.limit", "Up to {mb} MB a file.").replace("{mb}", mb(local.max_bytes))
+      + " " + (video ? t("media.local.takesVideo", "This folder takes films and sound.")
+                     : t("media.local.takesAudio", "This folder takes sound."));
+  }
+  function loadLocal() {
+    return api("/api/media/local").then(function (r) {
+      if (!r.installed) { el("local-wrap").hidden = true; return; }
+      var keep = el("local-cat").value || "Music";
+      local = r;
+      el("local-wrap").hidden = false;
+      el("local-where").textContent = t("media.local.where", "Files go in {folder}, where the Local media skill finds them.")
+        .replace("{folder}", r.folder);
+      var sel = el("local-cat");
+      sel.textContent = "";
+      r.categories.forEach(function (c) {
+        var o = document.createElement("option");
+        o.value = c.id;
+        o.textContent = catLabel(c.id) + (c.files.length ? " (" + c.files.length + ")" : "");
+        sel.appendChild(o);
+      });
+      sel.value = keep;
+      showLocalList();
+    }).catch(function (e) { OvosWebUI.say("msg-local", e.message, true); });
+  }
+  el("local-cat").addEventListener("change", showLocalList);
+  function sendFile(file, cat, done, all) {
+    var part = local.part, offset = 0;
+    function next() {
+      var blob = file.slice(offset, offset + part);
+      var q = "?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(file.name)
+        + "&offset=" + offset + "&total=" + file.size;
+      return api("/api/media/local/upload" + q, {method: "POST",
+        headers: {"Content-Type": "application/octet-stream"}, body: blob})
+        .then(function (r) {
+          offset = r.received;
+          el("local-progress").value = Math.round(100 * (done + offset) / all);
+          return r.done ? r : next();
+        });
+    }
+    return next();
+  }
+  el("local-send").addEventListener("click", function () {
+    var files = Array.prototype.slice.call(el("local-file").files || []);
+    var cat = el("local-cat").value;
+    if (!files.length) { OvosWebUI.say("msg-local", t("media.local.pick", "Choose one or more files first."), true); return; }
+    var big = files.filter(function (f) { return f.size > local.max_bytes; })[0];
+    if (big) {
+      OvosWebUI.say("msg-local", big.name + ": " + t("media.local.limit", "Up to {mb} MB a file.").replace("{mb}", mb(local.max_bytes)), true);
+      return;
+    }
+    var empty = files.filter(function (f) { return !f.size; })[0];
+    if (empty) { OvosWebUI.say("msg-local", empty.name + ": " + t("media.local.emptyFile", "The file is empty."), true); return; }
+    var all = files.reduce(function (n, f) { return n + f.size; }, 0), done = 0;
+    el("local-send").disabled = true;
+    el("local-progress").hidden = false;
+    el("local-progress").value = 0;
+    OvosWebUI.say("msg-local", t("media.local.busy", "Sending …"));
+    files.reduce(function (p, f) {
+      return p.then(function () { return sendFile(f, cat, done, all).then(function () { done += f.size; }); });
+    }, Promise.resolve())
+      .then(function () {
+        OvosWebUI.say("msg-local", t("media.local.sent", "On the device. The skill reads the folder again."));
+        el("local-file").value = "";
+      })
+      .catch(function (e) { OvosWebUI.say("msg-local", e.message, true); })
+      .then(function () { el("local-send").disabled = false; el("local-progress").hidden = true; loadLocal(); });
+  });
+  loadLocal();
 
   // ── gate on the media service, then load ────────────────────────────────
   api("/api/media/available").then(function (r) {

@@ -29,6 +29,12 @@ class MediaToggleBody(BaseModel):
     enabled: bool
 
 
+class LocalFileBody(BaseModel):
+    """One of your own files: the skill's folder and the file's name."""
+    category: str = Field(max_length=40)
+    name: str = Field(max_length=400)
+
+
 class MediaVolumeBody(BaseModel):
     percent: int = Field(ge=0, le=100, strict=True)
 
@@ -141,3 +147,44 @@ def routes(r) -> None:
     def api_media_unmute() -> dict[str, Any]:
         from ovos_control_panel_media import player as media
         return media.unmute(r.need_bus())
+
+    # ── your own media: files for ovos-skill-local-media ──────────────────────
+    # Privileged like the rest: the list shows what is kept on the device, and
+    # the others write and delete files there.
+    from fastapi import Query, Request
+
+    def _fail(e) -> HTTPException:
+        return HTTPException(e.status, e.detail)
+
+    @r.privileged.get("/media/local")
+    def api_media_local() -> dict[str, Any]:
+        from ovos_control_panel_media import local
+        return local.overview()
+
+    @r.privileged.post("/media/local/upload")
+    async def api_media_local_upload(request: Request,
+                                     category: str = Query(max_length=40),
+                                     name: str = Query(max_length=400),
+                                     offset: int = Query(ge=0),
+                                     total: int = Query(ge=1)) -> dict[str, Any]:
+        from starlette.concurrency import run_in_threadpool
+
+        from ovos_control_panel_media import local
+        blob = await request.body()
+        try:
+            done = await run_in_threadpool(local.receive, category, name, offset, total, blob)
+        except local.LocalMediaError as e:
+            raise _fail(e) from e
+        if done["done"]:
+            local.rescan(r.bus(), done.pop("skill"))
+        return done
+
+    @r.privileged.post("/media/local/delete")
+    def api_media_local_delete(body: LocalFileBody) -> dict[str, Any]:
+        from ovos_control_panel_media import local
+        try:
+            sid = local.remove(body.category, body.name)
+        except local.LocalMediaError as e:
+            raise _fail(e) from e
+        local.rescan(r.bus(), sid)
+        return {"ok": True}

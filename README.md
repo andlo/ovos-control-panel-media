@@ -54,6 +54,28 @@ again.
 Move the slider to set the volume from 0 to 100. Select **Mute** to silence the
 device, and **Unmute** to restore the sound.
 
+## Your own media
+
+With [ovos-skill-local-media](https://github.com/OpenVoiceOS/ovos-skill-local-media)
+installed where the panel runs, the page also has a card for your own files.
+Choose one of the skill's folders (Music, Podcasts, Audiobooks, Films, Series
+and the others) and one or more files, and they are put where the skill looks:
+`~/OCPMedia/<folder>`, or the skill's own `media_path` setting. Then the skill
+is asked to read its folders again, so you can ask for the song at once. The
+card also lists the files in each folder, and deletes one when you ask.
+
+- The sound folders take sound (`.mp3`, `.ogg`, `.flac`, `.wav`, `.m4a` and
+  others); the film folders take films and sound.
+- The largest file is the panel's own setting, on the **Control panel** page
+  under **Uploads**: 1024 MB unless it is set. A device that is never meant to
+  hold films can take less.
+- A file goes in parts of 8 MB, so a large one never sits in memory, and a
+  file with the same name that is already there is left as it is.
+- Everything on the card needs the token.
+
+The panel and the skill have to run on the same machine, as for the panel's
+Skills page.
+
 ## Development
 
 ```

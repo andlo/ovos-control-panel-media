@@ -32,4 +32,6 @@ PAGE = {
     "heading": {"key": "hdr.media", "label": "Media"},
     "i18n": "i18n",
     "routes": routes,
+    # your own media comes in parts of 8 MB (local.PART), and a little more
+    "uploads": {"/api/media/local/upload": 8 * 1024 * 1024 + 64 * 1024},
 }
